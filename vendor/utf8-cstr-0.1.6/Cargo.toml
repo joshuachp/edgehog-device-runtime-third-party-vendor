@@ -1,0 +1,11 @@
+[package]
+name = "utf8-cstr"
+version = "0.1.6"
+authors = ["Cody P Schafer <dev@codyps.com>"]
+license = "Apache-2.0 OR MIT"
+description = "Type wrappers promising null termination and utf-8 validity. The intersection of `std::ffi::CStr` and `str`"
+repository = "https://github.com/jmesmon/utf8-cstr"
+documentation = "http://codyps.com/docs/utf8-cstr/x86_64-unknown-linux-gnu/stable/utf8_cstr/index.html"
+
+[dev-dependencies]
+assert_matches = "1"
