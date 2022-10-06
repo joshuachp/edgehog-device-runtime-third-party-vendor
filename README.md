@@ -4,7 +4,8 @@ This repository contains all the vendored Rust dependencies that are required in
 order to build
 [edgehog-device-runtime](https://github.com/edgehog-device-manager/edgehog-device-runtime).
 
-## To use vendored sources, add this to your .cargo/config.toml for the edgehog-device-runtime project:
+## Usage
+To use vendored sources, add this to your .cargo/config.toml for the edgehog-device-runtime project:
 
 ``` toml
 [source.crates-io]
