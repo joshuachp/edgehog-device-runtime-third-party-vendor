@@ -1,0 +1,160 @@
+# This file is part of Hedgehog.
+#
+# Copyright 2023 SECO Mind Srl
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: vendor
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+env:
+  PB_REL: https://github.com/protocolbuffers/protobuf/releases
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install latest rust stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - name: Checkout the repo
+        uses: actions/checkout@v3
+        with:
+          repository: edgehog-device-manager/edgehog-device-runtime
+          # Fetch all tags
+          fetch-depth: 0
+      - name: Get the latest tag
+        # Get the tags in reverse version (-V) sort order
+        run: |
+          if [[ ! $GITHUB_REF =~ ^refs/heads/release-.*$ ]]; then
+            echo "Not a release branch $GITHUB_REF" >&2
+            exit 1
+          fi
+
+          version=$(echo $GITHUB_REF | cut -d'-' -f 2)
+          echo $version
+
+          GIT_TAG=$(git tag | grep "v$version" | sort -V | tail -n 1)
+          echo "GIT_TAG=$GIT_TAG" | tee >> "$GITHUB_ENV"
+          echo "$GIT_TAG" > .last-tag
+      - name: Checkout the last tag
+        run: git checkout "$GIT_TAG"
+      - name: Vendor the dependencies
+        run: cargo vendor  --versioned-dirs --locked
+      - name: Compress the vendor dir
+        run: tar -czf vendor.tar.gz vendor/ .last-tag
+      - name: Upload the vendor directory
+        uses: actions/upload-artifact@v3
+        with:
+          name: deps-vendor
+          path: vendor.tar.gz
+  open-pr:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    needs: vendor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repo
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: Configure git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "<>"
+      - name: Download the vendored artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: deps-vendor
+      - name: Clean up old files
+        run: rm -vrf vendor/ .last-tag
+      - name: Extract vendor artifact
+        run: |
+          tar -xvf vendor.tar.gz
+      - name: Cleanup the vendor artifact
+        run: rm vendor.tar.gz
+      - name: Get the last tag value
+        run: |
+          GIT_TAG=$(cat .last-tag)
+          echo "GIT_TAG=$GIT_TAG" | tee >> "$GITHUB_ENV"
+      - name: Create the new branch
+        run: git checkout -b "vendor/$GIT_TAG"
+      - name: Commit the new vendored dependencies
+        run: |
+          git add .
+          git commit --signoff -m "ci: update dependencies for tag $GIT_TAG"
+          git push --force-with-lease --set-upstream origin "vendor/$GIT_TAG"
+      - name: Create the pull request
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const tag = process.env.GIT_TAG;
+            github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: `vendor/${tag}`,
+              base: context.ref,
+              title: `Update vendored dependencies to ${tag}`
+            });
+  test-vendor:
+    permissions:
+      contents: read
+    needs: vendor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install latest rust stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - name: Install libudev and protoc
+        run: |
+            sudo apt update
+            sudo apt-get install -y libudev-dev libsystemd-dev
+            curl -LO $PB_REL/download/v22.2/protoc-22.2-linux-x86_64.zip
+            unzip protoc-22.2-linux-x86_64.zip -d $HOME/.local
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Download the vendored artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: deps-vendor
+      - name: Extract vendor artifact
+        run: |
+          tar -xvf vendor.tar.gz
+      - name: Get the last tag value
+        run: |
+          GIT_TAG=$(cat .last-tag)
+          echo "GIT_TAG=$GIT_TAG" | tee >> "$GITHUB_ENV"
+      - name: Checkout the repo
+        uses: actions/checkout@v3
+        with:
+          repository: edgehog-device-manager/edgehog-device-runtime
+          ref: ${{ env.GIT_TAG }}
+          path: edgehog-device-runtime
+      - name: Setup vendored dependencies
+        run: |
+          mkdir -p edgehog-device-runtime/.cargo
+          echo '[source.crates-io]
+          replace-with = "vendored-sources"
+
+          [source.vendored-sources]
+          directory = "../vendor"' >> edgehog-device-runtime/.cargo/config.toml
+      - name: Check build with offline
+        run: |
+          cd edgehog-device-runtime
+          cargo build --offline
